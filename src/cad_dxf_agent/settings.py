@@ -1,0 +1,123 @@
+"""Application settings loaded from environment variables."""
+
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
+class Settings:
+    """Application configuration from environment variables."""
+
+    def __init__(self) -> None:
+        self.llm_provider: str = os.getenv("CAD_LLM_PROVIDER", "mock")
+        # Provider-neutral BYOK settings. Custom providers may use these
+        # conventions directly, or ignore them and read their own variables.
+        self.llm_model: str | None = os.getenv("CAD_LLM_MODEL") or None
+        self.llm_api_key: str | None = os.getenv("CAD_LLM_API_KEY") or None
+        self.llm_base_url: str | None = os.getenv("CAD_LLM_BASE_URL") or None
+
+        # Protected layers (never editable)
+        raw_layers = os.getenv("CAD_PROTECTED_LAYERS", "TITLE,TITLEBLOCK,SEAL,REVISION")
+        self.protected_layers: list[str] = [
+            layer.strip().upper() for layer in raw_layers.split(",") if layer.strip()
+        ]
+
+        # AI revision notes
+        self.revision_notes_enabled: bool = (
+            os.getenv("CAD_REVISION_NOTES_ENABLED", "true").lower() == "true"
+        )
+        self.revision_notes_layer: str = os.getenv("CAD_REVISION_NOTES_LAYER", "AI_REV_NOTES")
+
+        # OpenTelemetry
+        self.otel_enabled: bool = os.getenv("OTEL_ENABLED", "").lower() in ("1", "true", "yes")
+        self.otel_exporter: str = os.getenv("OTEL_EXPORTER", "console")  # console|otlp|gcp-trace
+        self.otel_endpoint: str | None = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
+        # Logging
+        self.log_level: str = os.getenv("CAD_LOG_LEVEL", "INFO")
+
+        # Conversion (V2)
+        self.oda_path: str | None = os.getenv("CAD_ODA_PATH")  # auto-detected if None
+        self.target_dxf_version: str = os.getenv("CAD_TARGET_DXF_VERSION", "R2010")
+
+        # Vision pipeline (render DXF → PNG → Gemini vision → text description)
+        self.vision_enabled: bool = os.getenv("CAD_VISION_ENABLED", "true").lower() == "true"
+
+        # Rendering (V2)
+        self.render_dpi: int = int(os.getenv("CAD_RENDER_DPI", "150"))
+        self.render_background: str = os.getenv("CAD_RENDER_BACKGROUND", "white")
+
+        # Planner timeout / retry
+        self.planner_timeout: int = int(os.getenv("CAD_PLANNER_TIMEOUT", "60"))
+        self.planner_max_retries: int = int(os.getenv("CAD_PLANNER_MAX_RETRIES", "2"))
+        self.planner_retry_delay: float = float(os.getenv("CAD_PLANNER_RETRY_DELAY", "1.0"))
+        self.planner_max_validation_retries: int = int(
+            os.getenv("CAD_PLANNER_MAX_VALIDATION_RETRIES", "2")
+        )
+
+        # LLM generation parameters
+        self.llm_temperature: float = float(os.getenv("CAD_LLM_TEMPERATURE", "0.0"))
+        self.llm_top_p: float | None = float(v) if (v := os.getenv("CAD_LLM_TOP_P")) else None
+        self.llm_top_k: int | None = int(v) if (v := os.getenv("CAD_LLM_TOP_K")) else None
+        self.llm_max_output_tokens: int = int(os.getenv("CAD_LLM_MAX_OUTPUT_TOKENS", "4096"))
+
+        # Cloud / GCP (generic — e.g. OTel gcp-trace exporter; optional for BYO providers)
+        self.gcp_project: str | None = os.getenv("CAD_GCP_PROJECT")
+        self.gcp_location: str = os.getenv("CAD_GCP_LOCATION", "us-central1")
+        self.license_key: str | None = os.getenv("CAD_LICENSE_KEY")
+
+        # Router
+        self.enabled_task_families: str | None = os.getenv("CAD_ENABLED_TASK_FAMILIES")
+        self.router_llm_enabled: bool = (
+            os.getenv("CAD_ROUTER_LLM_ENABLED", "false").lower() == "true"
+        )
+        self.router_confidence_threshold: float = float(
+            os.getenv("CAD_ROUTER_CONFIDENCE_THRESHOLD", "0.9")
+        )
+
+        # PDF conversion tuning
+        self.pdf_arc_tolerance: float = float(os.getenv("CAD_PDF_ARC_TOLERANCE", "0.05"))
+        self.pdf_bezier_segments: int = int(os.getenv("CAD_PDF_BEZIER_SEGMENTS", "8"))
+        self.pdf_max_hatch_entities: int = int(os.getenv("CAD_PDF_MAX_HATCH_ENTITIES", "500"))
+        self.pdf_min_entity_size: float = float(os.getenv("CAD_PDF_MIN_ENTITY_SIZE", "1.0"))
+
+        # Edit history
+        self.max_undo_snapshots: int = int(os.getenv("CAD_MAX_UNDO_SNAPSHOTS", "50"))
+
+        # Agent backend (EPIC-CAD-31: Phase 0+1 only, Phase 2+ deferred)
+        agent_backend = os.getenv("CAD_AGENT_BACKEND", "cloud_run")
+        if agent_backend not in ("cloud_run", "agent_engine"):
+            raise ValueError(
+                f"CAD_AGENT_BACKEND must be 'cloud_run' or 'agent_engine', got '{agent_backend}'"
+            )
+        self.agent_backend: str = agent_backend
+        self.agent_engine_url: str | None = os.getenv("CAD_AGENT_ENGINE_URL") or None
+
+    def get_api_key(self, provider: str) -> str | None:
+        """Retrieve API key for a provider. Never logs the key."""
+        key_map = {
+            "gemini-key": "CAD_GEMINI_API_KEY",
+        }
+        # Provider-specific keys take precedence for backwards compatibility;
+        # CAD_LLM_API_KEY is the portable fallback for any model/provider.
+        env_var = key_map.get(provider)
+        value = os.getenv(env_var) if env_var else None
+        value = value or self.llm_api_key
+        if value:
+            logger.debug("API key loaded for provider: %s", provider)
+        return value
+
+    @property
+    def data_dir(self) -> Path:
+        return Path.home() / ".cad-dxf-agent"
+
+
+settings = Settings()

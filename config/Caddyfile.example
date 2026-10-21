@@ -1,0 +1,25 @@
+# Host-installed Caddy example. Replace the domain and match CAD_PUBLIC_ORIGIN.
+# Reuse an existing site's handle_path block instead of replacing other routes.
+# Backend stays on loopback; change 8323 if CAD_HTTP_PORT was changed.
+cad.example.com {
+	@cad_root path /cad
+	redir @cad_root /cad/local-qa 308
+	handle_path /cad/* {
+		request_body {
+			max_size 26MiB
+		}
+		reverse_proxy 127.0.0.1:8323 {
+			transport http {
+				read_timeout 210s
+				write_timeout 210s
+				response_header_timeout 210s
+			}
+		}
+	}
+	handle / {
+		redir /cad/local-qa 308
+	}
+	handle {
+		respond 404
+	}
+}

@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "drawing_unit": "mm",
+  "floor": "2F",
+  "rooms": [
+    {
+      "name": "会议室",
+      "area_m2": 16.0,
+      "boundary_handle": "39",
+      "label_handle": "3A"
+    },
+    {
+      "name": "办公室",
+      "area_m2": 24.0,
+      "boundary_handle": "3B",
+      "label_handle": "3C"
+    },
+    {
+      "name": "走廊",
+      "area_m2": 20.0,
+      "boundary_handle": "3D",
+      "label_handle": "3E"
+    }
+  ],
+  "door_counts": {
+    "M0921": 2
+  },
+  "window_count": 4,
+  "door_handles": [
+    "47",
+    "4D"
+  ]
+}

@@ -1,0 +1,17 @@
+# Versions from the working prototype; only the read-only web runtime.
+fastapi==0.148.0
+uvicorn[standard]==0.54.0
+python-multipart==0.0.32
+ezdxf==1.4.5
+pydantic==2.14.1
+python-dotenv==1.2.4
+numpy==2.4.6
+httpx==0.28.1
+matplotlib==3.11.2
+Pillow==13.0.0
+PyYAML==6.0.3
+rtree==1.4.1
+shapely==2.2.0
+pyproj==3.8.0
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1

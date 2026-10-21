@@ -1,0 +1,10 @@
+# Runtime dependencies are pinned separately and shared with the Docker build.
+-r requirements-production.txt
+# Retained upstream web regression tests; these are not production services.
+firebase-admin==7.7.0
+pdfplumber==0.11.9
+fpdf2>=2.8,<3
+pytest==9.1.1
+pytest-asyncio>=1.3,<2
+pytest-socket>=0.7,<1
+ruff==0.17.1

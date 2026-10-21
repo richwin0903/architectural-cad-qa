@@ -1,0 +1,373 @@
+import { auth } from './firebase';
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
+const DEFAULT_TIMEOUT_MS = 60_000;   // 60s for most requests
+const UPLOAD_TIMEOUT_MS = 300_000;   // 5min for large PDF uploads
+
+async function getToken() {
+  // Dev-mode auth bypass — matches backend CAD_WEB_DEV_MODE
+  if (import.meta.env.VITE_DEV_AUTH === '1') return 'dev-token';
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
+  return user.getIdToken();
+}
+
+/** Turn network-level errors into user-friendly messages */
+function friendlyError(err) {
+  if (err.name === 'AbortError') {
+    return 'Request timed out — the server took too long to respond. Please try again.';
+  }
+  if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
+    return 'Unable to reach the server. Check your internet connection and try again.';
+  }
+  return err.message;
+}
+
+async function request(path, options = {}) {
+  const token = await getToken();
+  const url = `${API_BASE}${path}`;
+  const timeoutMs = options._timeout || DEFAULT_TIMEOUT_MS;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...options.headers,
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    // Network-level failure (timeout, offline, DNS, etc.)
+    throw new Error(friendlyError(err));
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 404 || /not found/i.test(body.detail || '')) {
+      throw new Error("Your session has expired. Please click 'New File' and re-upload your drawing.");
+    }
+    throw new Error(body.detail || `API error: ${res.status}`);
+  }
+
+  return res;
+}
+
+export async function healthCheck() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch(`${API_BASE}/api/health`, { signal: controller.signal });
+    return res.json();
+  } catch (err) {
+    throw new Error(friendlyError(err));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function uploadFile(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await request('/api/upload', {
+    method: 'POST',
+    body: formData,
+    _timeout: UPLOAD_TIMEOUT_MS,
+  });
+  return res.json();
+}
+
+export async function planEdit(sessionId, prompt) {
+  const res = await request('/api/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, prompt }),
+  });
+  return res.json();
+}
+
+export async function v2Prompt(sessionId, prompt, selectedRegions = null, clientMetadata = null) {
+  const body = { session_id: sessionId, prompt };
+  if (selectedRegions) body.selected_regions = selectedRegions;
+  if (clientMetadata) body.client_metadata = clientMetadata;
+  const res = await request('/api/v2/prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+export async function applyChanges(sessionId, selectedOps = null) {
+  const res = await request('/api/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, selected_ops: selectedOps }),
+  });
+  return res.json();
+}
+
+export async function clearHistory(sessionId) {
+  const res = await request('/api/clear-history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  return res.json();
+}
+
+export function getRenderUrl(sessionId, type = 'original') {
+  return `${API_BASE}/api/render?session_id=${sessionId}&type=${type}`;
+}
+
+export async function getRenderBlob(sessionId, type = 'original') {
+  const res = await request(`/api/render?session_id=${sessionId}&type=${type}`);
+  return res.blob();
+}
+
+export async function getDxfBlob(sessionId, type = 'original') {
+  const res = await request(`/api/dxf?session_id=${sessionId}&type=${type}`);
+  return res.blob();
+}
+
+export async function fetchProfiles() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}/api/profiles`, { signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`Failed to fetch profiles: ${res.status}`);
+    }
+    return res.json();
+  } catch (err) {
+    throw new Error(friendlyError(err));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function compareFiles(sessionId, revisionFile, profile = null) {
+  const formData = new FormData();
+  formData.append('file', revisionFile);
+
+  let url = `/api/compare?session_id=${sessionId}`;
+  if (profile) {
+    url += `&profile=${encodeURIComponent(profile)}`;
+  }
+
+  const res = await request(url, {
+    method: 'POST',
+    body: formData,
+  });
+  return res.json();
+}
+
+export async function downloadFile(sessionId) {
+  const res = await request(`/api/download?session_id=${sessionId}`);
+  const blob = await res.blob();
+
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?(.+?)"?$/);
+  const filename = match ? match[1] : 'edited.dxf';
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function revisionUpload(sessionId, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await request(`/api/revision/upload?session_id=${sessionId}`, {
+    method: 'POST',
+    body: formData,
+    _timeout: UPLOAD_TIMEOUT_MS,
+  });
+  return res.json();
+}
+
+export async function revisionAlign(sessionId, controlPoints = null) {
+  const res = await request('/api/revision/align', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, control_points: controlPoints }),
+  });
+  return res.json();
+}
+
+export async function revisionDiff(sessionId, profile = null) {
+  const res = await request('/api/revision/diff', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, profile }),
+  });
+  return res.json();
+}
+
+export async function revisionApprove(sessionId, approvals) {
+  const res = await request('/api/revision/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, approvals }),
+  });
+  return res.json();
+}
+
+export async function revisionApply(sessionId) {
+  const res = await request('/api/revision/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  return res.json();
+}
+
+export async function revisionDownloadBlob(sessionId) {
+  const res = await request(`/api/revision/download?session_id=${sessionId}`);
+  return res.blob();
+}
+
+// --- Document Library (EPIC-CAD-15) ---
+
+export async function listDocuments() {
+  const res = await request('/api/documents');
+  return res.json();
+}
+
+export async function uploadDocument(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await request('/api/documents', {
+    method: 'POST',
+    body: formData,
+    _timeout: UPLOAD_TIMEOUT_MS,
+  });
+  return res.json();
+}
+
+export async function getDocumentInfo(docId) {
+  const res = await request(`/api/documents/${docId}`);
+  return res.json();
+}
+
+export async function deleteDocument(docId) {
+  const res = await request(`/api/documents/${docId}`, { method: 'DELETE' });
+  return res.json();
+}
+
+export async function loadDocument(docId) {
+  const res = await request(`/api/documents/${docId}/load`, { method: 'POST' });
+  return res.json();
+}
+
+export async function listActiveSessions() {
+  const res = await request('/api/sessions/active');
+  return res.json();
+}
+
+export async function reconnectSession(documentId) {
+  const res = await request('/api/session/reconnect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ document_id: documentId }),
+  });
+  return res.json();
+}
+
+export async function getStorageUsage() {
+  const res = await request('/api/documents/usage');
+  return res.json();
+}
+
+export async function compareLibraryDocuments(masterDocId, revisionDocId, profile = null) {
+  const res = await request('/api/documents/compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ master_doc_id: masterDocId, revision_doc_id: revisionDocId, profile }),
+  });
+  return res.json();
+}
+
+// --- Profile + Workspace (EPIC-CAD-30) ---
+
+export async function getProfile() {
+  const res = await request('/api/profile');
+  return res.json();
+}
+
+export async function updateProfile(updates) {
+  const res = await request('/api/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  return res.json();
+}
+
+export async function getWorkspace() {
+  const res = await request('/api/workspace');
+  return res.json();
+}
+
+export async function saveDocumentProgress(docId) {
+  const res = await request(`/api/documents/${docId}/save-progress`, { method: 'POST' });
+  return res.json();
+}
+
+export async function clearDocumentProgress(docId) {
+  const res = await request(`/api/documents/${docId}/work-progress`, { method: 'DELETE' });
+  return res.json();
+}
+
+// --- Entity picking (viewer click → nearest entities) ---
+
+export async function entitiesNear(sessionId, x, y, radius = 50, limit = 5) {
+  const res = await request('/api/entities/near', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, x, y, radius, limit }),
+  });
+  return res.json();
+}
+
+// --- v2 Preview / Approve / Apply (EPIC-CAD-08) ---
+
+export async function v2Preview(sessionId) {
+  const res = await request('/api/v2/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  return res.json();
+}
+
+export async function v2Approve(sessionId, planId, approved, notes = '') {
+  const res = await request('/api/v2/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, plan_id: planId, approved, notes }),
+  });
+  return res.json();
+}
+
+export async function v2Apply(sessionId) {
+  const res = await request('/api/v2/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  return res.json();
+}

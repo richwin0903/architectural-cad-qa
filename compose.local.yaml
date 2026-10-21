@@ -1,0 +1,38 @@
+services:
+  proxy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CAD_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./config/Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    cap_drop: [ALL]
+    # The official Caddy binary carries this file capability for its TLS port.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, --no-check-certificate, "https://localhost/cad/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  caddy_data:
+  caddy_config:

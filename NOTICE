@@ -1,0 +1,17 @@
+Architectural CAD QA — read-only web derivative
+
+This project is derived from cad-ai-agent / cad-dxf-agent by its upstream
+contributors: https://github.com/jeremylongshore/cad-ai-agent
+The upstream source snapshot identifies itself as version 0.12.0. Its exact
+upstream commit is not recorded in the input snapshot.
+
+The upstream Apache License, Version 2.0 is retained in LICENSE. Existing
+copyright and attribution notices remain applicable. This derivative adds
+Chinese CAD QA, DeepSeek integration, evidence navigation, production session
+authentication, GNU LibreDWG conversion, open-font preview support, deployment
+configuration and tests. See docs/UPSTREAM.md for scope.
+
+GNU LibreDWG, bundled fonts and the LibreDWG-derived regression fixture retain
+their separate licenses. See THIRD_PARTY_NOTICES.md and licenses/GPL-3.0.txt.
+No upstream endorsement of this derivative or related commercial services is
+implied. This NOTICE is informational and does not replace any license.

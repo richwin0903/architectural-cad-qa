@@ -1,0 +1,82 @@
+name: Validate CAD QA MVP
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src:.
+      MPLBACKEND: Agg
+      DEEPSEEK_API_KEY: ""
+      GOOGLE_API_KEY: ""
+      GEMINI_API_KEY: ""
+      CAD_WEB_DEV_MODE: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-production.txt
+            requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip install -e . --no-deps
+      - name: Check tracked publication files
+        run: python scripts/check-release.py --index
+      - name: Lint maintained deployment and QA code
+        run: >-
+          python -m ruff check
+          web/backend/admin_auth.py web/backend/production.py
+          web/backend/production_dwg.py web/backend/deepseek_qa.py
+          web/backend/local_support.py src/cad_dxf_agent/core/cjk_font.py
+          tests/deployment tests/local_qa tests/packaging scripts
+      - name: Run offline backend regressions
+        run: python -m pytest tests/local_qa tests/deployment tests/web tests/packaging -q --tb=short --disable-socket --allow-unix-socket
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web/frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run test:font
+      - run: npm run lint
+      - run: npm run build
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Build production image without credentials or publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

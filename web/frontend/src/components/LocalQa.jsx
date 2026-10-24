@@ -91,7 +91,7 @@ function Evidence({ items, onLocate }) {
   </div>;
 }
 
-export default function LocalQa({ adminUsername, onLogout, loggingOut = false }) {
+export default function LocalQa({ adminUsername, account, onAccountRefresh, onLogout, loggingOut = false }) {
   const [focusMode, setFocusMode] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [status, setStatus] = useState(null);
@@ -208,7 +208,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
       else { failures.static = '暂未生成静态预览。可以使用交互图纸查看，问答仍可继续。'; if (dxf.status === 'fulfilled') setPreviewMode('interactive'); }
       setPreviewErrors(failures);
     } catch (error) { setUploadError(error.message); }
-    finally { setUploading(false); setPreviewLoading(false); }
+    finally { setUploading(false); setPreviewLoading(false); onAccountRefresh?.(); }
   }
 
   async function loadDemo() {
@@ -247,7 +247,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
       setModelVerified(false);
       setMessages((current) => current.map((message, index) => index === current.length - 1 ? { ...message, failed: true } : message));
       setQuestion(prompt);
-    } finally { setAsking(false); }
+    } finally { setAsking(false); onAccountRefresh?.(); }
   }
 
   function locate(bounds) {
@@ -288,6 +288,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
     <section className="lqa-intro"><div><span className="lqa-eyebrow"><span />让专业知识，遇见 AI</span><h2>让图纸里的信息，<em>清晰可见。</em></h2><p>读懂文字与图块，计算几何信息，让每一个回答都有迹可循。</p></div><div className="lqa-steps"><span><b>01</b>上传图纸</span><Icon name="arrow" size={16} /><span><b>02</b>自然提问</span><Icon name="arrow" size={16} /><span><b>03</b>定位依据</span></div></section>
     {guideOpen && <section className="lqa-guide" id="lqa-guide" aria-label="使用指南"><div className="lqa-guide-heading"><h2>三步，开始读懂一张图纸</h2><button className="lqa-icon-button" aria-label="关闭使用指南" onClick={() => setGuideOpen(false)}><Icon name="close" size={18} /></button></div><div className="lqa-guide-grid"><div><span>01 / 上传</span><h3>选择你的 CAD 图纸</h3><p>支持 DXF，服务可用时也支持 DWG 自动转换。最大 25 MB；初次体验可以使用合成建筑示例。</p></div><div><span>02 / 提问</span><h3>从具体的问题开始</h3><p>询问房间文字、图层、图块数量或闭合轮廓面积。明确对象名称，更容易找到相关信息。</p></div><div><span>03 / 核对</span><h3>回到图纸，查看依据</h3><p>点击回答下方的“定位”，在交互图纸中核对图元。几何面积不等同于建筑净面积，复杂图纸需人工复核。</p></div></div><p className="lqa-guide-privacy">图纸在服务器解析；整图预览、局部截图、相关图元文字属性和对话会发送至 DeepSeek，原始 CAD 文件不发送。请使用有权处理的公开或脱敏图纸。</p></section>}
 
+    {account?.role === 'trial' && <div className="lqa-banner lqa-trial-summary" role="status"><strong>限量试用</strong><span>今日问答剩余 {account.usage?.daily_qa_remaining} / {account.limits?.daily_qa} 次 · 累计剩余 {account.usage?.total_qa_remaining} 次 · 今日上传剩余 {account.usage?.daily_uploads_remaining} 次</span><span>试用到期：{new Date(account.trial_expires_at * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）</span><small>每日额度于北京时间零点刷新；开始处理即计次，失败也计入。每次登录只保留最近成功上传的图纸，新登录会撤销旧登录。</small></div>}
     {statusError && <div className="lqa-banner lqa-banner--error" role="alert">{statusError}</div>}
     {status && !status.configured && <div className="lqa-banner" role="status">后端尚未配置模型密钥。可以先上传并查看图纸，问答需要完成模型配置。</div>}
     <div className="lqa-workspace" id="lqa-workspace">

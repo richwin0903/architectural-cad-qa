@@ -62,6 +62,7 @@ DENIED_NAMES = {
     "runtime.env", "initial-admin-password", "credentials", "credentials.json",
     "service-account.json", "serviceaccount.json", "cookies.txt", ".netrc",
     ".npmrc", ".pypirc", ".release.env",
+    "accounts.txt", "accounts-import.json",
 }
 DENIED_SUFFIXES = {
     ".log", ".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12",

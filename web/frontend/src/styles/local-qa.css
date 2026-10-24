@@ -309,3 +309,6 @@
 @media (prefers-reduced-motion: reduce) {
   .lqa-app *, .lqa-app *::before, .lqa-app *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition: none !important; }
 }
+
+.lqa-trial-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; }
+.lqa-trial-summary small { flex-basis: 100%; line-height: 1.6; }

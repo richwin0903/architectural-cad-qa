@@ -74,7 +74,7 @@ function AuthLoading({ error = '' }) {
 }
 
 function Login({ onLogin }) {
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -92,7 +92,7 @@ function Login({ onLogin }) {
       window.location.replace(QA_PATH);
     } catch (failure) {
       setPassword('');
-      setError(failure.status === 429 ? '登录尝试过于频繁，请稍后再试。' : failure.status === 401 ? '账号或密码不正确。' : failure.message);
+      setError(failure.status === 429 ? '登录尝试过于频繁，请稍后再试。' : failure.message);
     } finally { setBusy(false); }
   }
 
@@ -119,10 +119,10 @@ function Login({ onLogin }) {
           {!secure && <div className="lqa-auth-banner lqa-auth-banner--error" role="alert">请通过已配置的 HTTPS 地址访问，以保护登录凭证。</div>}
           {error && <div className="lqa-auth-banner lqa-auth-banner--error" role="alert">{error}</div>}
           <form onSubmit={submit}>
-            <div className="lqa-auth-field"><label htmlFor="admin-username">管理员账号</label>
-              <input id="admin-username" name="username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required maxLength={128} disabled={busy || !secure} /></div>
-            <div className="lqa-auth-field"><label htmlFor="admin-password">密码</label>
-              <input id="admin-password" name="password" type="password" autoComplete="current-password" placeholder="输入你的登录密码" value={password} onChange={(event) => setPassword(event.target.value)} required maxLength={512} disabled={busy || !secure} /></div>
+            <div className="lqa-auth-field"><label htmlFor="admin-username">账号</label>
+              <input id="admin-username" name="username" autoComplete="username" placeholder="输入分配给你的账号" value={username} onChange={(event) => setUsername(event.target.value)} required maxLength={128} disabled={busy || !secure} /></div>
+            <div className="lqa-auth-field"><label htmlFor="admin-password">密码 / 访问 key</label>
+              <input id="admin-password" name="password" type="password" autoComplete="current-password" placeholder="输入你的密码或访问 key" value={password} onChange={(event) => setPassword(event.target.value)} required maxLength={512} disabled={busy || !secure} /></div>
             <button className="lqa-auth-submit" type="submit" disabled={busy || !secure || !username.trim() || !password}>{busy ? <><span className="lqa-auth-spinner" aria-hidden="true" /> 正在登录…</> : <>登录工作台 <AuthIcon type="arrow" /></>}</button>
           </form>
           <div className="lqa-auth-security"><AuthIcon type="lock" /><span>{secure ? 'HTTPS 安全连接 · 仅授权账号可访问' : '请使用 HTTPS 安全连接'}</span></div>
@@ -148,7 +148,7 @@ export default function AdminQaApp() {
 
   useEffect(() => {
     activeRef.current = true;
-    document.title = '建筑图纸问答 · 管理员工作台';
+    document.title = '建筑图纸问答 · 图纸工作台';
     document.documentElement.lang = 'zh-CN';
     let inProgress = false;
     let hasAuthenticated = false;
@@ -216,8 +216,17 @@ export default function AdminQaApp() {
     finally { setLoggingOut(false); }
   }
 
+  async function refreshAccount() {
+    try {
+      const value = await getAdminSession();
+      if (activeRef.current) acceptSession(value);
+    } catch (failure) {
+      if (failure.status === 401) expireSession();
+    }
+  }
+
   if (loading) return <AuthLoading />;
   if (isLoginPage && !session) return <Login onLogin={acceptSession} />;
   if (!session) return <AuthLoading error={error} />;
-  return <><LocalQa adminUsername={session.username} onLogout={logout} loggingOut={loggingOut} />{error && <div className="lqa-auth-error lqa-banner lqa-banner--error" role="alert">{error}</div>}</>;
+  return <><LocalQa adminUsername={session.username} account={session} onAccountRefresh={refreshAccount} onLogout={logout} loggingOut={loggingOut} />{error && <div className="lqa-auth-error lqa-banner lqa-banner--error" role="alert">{error}</div>}</>;
 }

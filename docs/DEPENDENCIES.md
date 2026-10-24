@@ -1,7 +1,7 @@
 # Frontend dependency maintenance
 
 The release keeps the upstream development workspace dependencies while its
-production entry builds only the single-admin, read-only CAD QA application.
+production entry builds only the authenticated, read-only CAD QA application.
 Firebase and its Node.js gRPC transport are absent from that production browser
 bundle. Vite, source-map-js and brace-expansion are build/lint dependencies.
 

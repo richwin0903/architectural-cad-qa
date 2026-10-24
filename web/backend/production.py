@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .admin_auth import AdminAuth, AuthConfig, public_session
+from .deepseek_qa import QARequest
 from .production_dwg import normalized_dwg
 
 
@@ -113,6 +114,7 @@ def create_app(
     )
     session_dir = session_cleanup_dir or Path("/tmp/cad-sessions")
     upload_lock = asyncio.Lock()
+    qa_lock = asyncio.Lock()
 
     def delete_drawings(uid: str) -> None:
         for session in list(prototype.session_mgr._sessions.values()):
@@ -234,6 +236,8 @@ def create_app(
         if old_user:
             auth.revoke(old_user["uid"])
             delete_drawings(old_user["uid"])
+        # Trial login revokes earlier logins; release their transient drawings.
+        await run_in_threadpool(cleanup)
         response = JSONResponse(public_session(user))
         auth.set_cookie(response, token)
         return response
@@ -253,7 +257,6 @@ def create_app(
     # This is an allowlist, never a mount of the upstream application. New
     # upstream routes are closed unless deliberately added here.
     allowed = {
-        ("POST", "/api/local-qa"),
         ("POST", "/api/entities/near"),
         ("GET", "/api/dxf"),
         ("GET", "/api/render"),
@@ -287,6 +290,41 @@ def create_app(
     if copied != allowed:
         raise RuntimeError("A required read-only upstream route is missing")
 
+    qa_endpoint = next(
+        route.endpoint
+        for route in prototype.create_local_qa_router(
+            prototype.session_mgr, prototype.get_user
+        ).routes
+        if isinstance(route, APIRoute) and route.path == "/api/local-qa"
+    )
+
+    @app.post("/api/local-qa")
+    async def local_qa(body: QARequest, request: Request, user: dict = Depends(require_user)):
+        # Reject invalid/foreign drawings before charging or contacting the model.
+        try:
+            drawing = prototype.session_mgr.get(body.session_id, user["uid"])
+        except (KeyError, PermissionError):
+            raise HTTPException(404, "图纸不存在或已过期。") from None
+        if drawing.context is None or not body.question.strip():
+            raise HTTPException(422, "请上传有效图纸并填写问题。")
+        if qa_lock.locked():
+            raise HTTPException(
+                429,
+                "服务正在处理其他问答，请稍后重试；本次未扣额度。",
+                headers={"Retry-After": "10"},
+            )
+        async with qa_lock:
+            lease = await run_in_threadpool(auth.reserve_trial_request, user, "qa")
+            try:
+                result = await qa_endpoint(body, user)
+                current = auth.authenticate(request)
+                if current is None or current["uid"] != user["uid"]:
+                    raise HTTPException(401, "登录已过期，请重新登录。")
+                result["account"] = public_session(current)
+                return result
+            finally:
+                auth.finish_trial_request(lease)
+
     @app.post("/api/upload")
     async def upload(
         request: Request, file: UploadFile = File(...), user: dict = Depends(require_user)
@@ -302,12 +340,15 @@ def create_app(
             if current is None or current["uid"] != user["uid"]:
                 raise HTTPException(401, "登录已过期，请重新登录。")
 
+        if user.get("role") == "trial" and upload_lock.locked():
+            raise HTTPException(429, "上传服务正忙，请稍后重试；本次未扣额度。")
         async with upload_lock:
             require_live_login()
             data = await file.read(prototype.MAX_UPLOAD_SIZE + 1)
             if len(data) > prototype.MAX_UPLOAD_SIZE:
                 raise HTTPException(413, "图纸最大为 25 MB。")
             require_live_login()
+            lease = await run_in_threadpool(auth.reserve_trial_request, user, "upload")
             before = set(prototype.session_mgr._sessions)
 
             def parse_in_worker(upload_file):
@@ -349,6 +390,11 @@ def create_app(
                     )
                 prototype.session_mgr.save_metadata(drawing)
                 response["file_info"] = drawing.file_info
+                if user.get("role") == "trial":
+                    # Keep only the newest successful upload in this trial login.
+                    for sid, prior in list(prototype.session_mgr._sessions.items()):
+                        if sid != drawing.session_id and prior.user_id == user["uid"]:
+                            prototype.session_mgr.delete(sid)
                 return response
             except BaseException as error:
                 for sid, drawing in list(prototype.session_mgr._sessions.items()):
@@ -368,6 +414,8 @@ def create_app(
                         422, "DWG 转换后的图纸无法解析，请检查文件或另存为 DXF。"
                     ) from None
                 raise
+            finally:
+                auth.finish_trial_request(lease)
 
     @app.get("/api/download")
     async def download(session_id: str, user: dict = Depends(require_user)):

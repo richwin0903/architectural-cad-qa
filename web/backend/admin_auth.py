@@ -1,4 +1,4 @@
-"""Single administrator authentication; opaque sessions are revocable server side.
+"""Administrator and provisioned trial accounts with revocable opaque sessions.
 
 Only password hashes and SHA-256 session-token digests are persisted. There is no
 development-mode or Firebase fallback in this module.
@@ -9,12 +9,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import sqlite3
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -127,6 +129,31 @@ class AdminAuth:
                     peer TEXT NOT NULL, failed_at REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS failures_time ON login_failures(failed_at);
+                CREATE TABLE IF NOT EXISTS trial_accounts (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    activate_by REAL NOT NULL,
+                    trial_days INTEGER NOT NULL,
+                    activated_at REAL,
+                    expires_at REAL,
+                    daily_limit INTEGER NOT NULL,
+                    total_limit INTEGER NOT NULL,
+                    upload_daily_limit INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS trial_usage (
+                    username TEXT NOT NULL,
+                    day TEXT NOT NULL,
+                    qa_count INTEGER NOT NULL DEFAULT 0,
+                    upload_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (username, day)
+                );
+                CREATE TABLE IF NOT EXISTS trial_jobs (
+                    username TEXT PRIMARY KEY,
+                    token TEXT NOT NULL,
+                    expires_at REAL NOT NULL
+                );
             """)
 
     @contextmanager
@@ -142,6 +169,70 @@ class AdminAuth:
     @staticmethod
     def token_digest(token: str) -> str:
         return hashlib.sha256(token.encode()).hexdigest()
+
+    @staticmethod
+    def _trial_version(account) -> str:
+        return hashlib.sha256(
+            (account["username"] + "\0" + account["password_hash"]).encode()
+        ).hexdigest()
+
+    @staticmethod
+    def _day(now: float) -> str:
+        return datetime.fromtimestamp(now, timezone(timedelta(hours=8))).date().isoformat()
+
+    def _usage(self, db, account, now):
+        today = db.execute(
+            "SELECT qa_count, upload_count FROM trial_usage WHERE username = ? AND day = ?",
+            (account["username"], self._day(now)),
+        ).fetchone()
+        total = db.execute(
+            "SELECT COALESCE(SUM(qa_count), 0) FROM trial_usage WHERE username = ?",
+            (account["username"],),
+        ).fetchone()[0]
+        return {
+            "daily_qa_remaining": max(0, account["daily_limit"] - (today[0] if today else 0)),
+            "total_qa_remaining": max(0, account["total_limit"] - total),
+            "daily_uploads_remaining": max(
+                0, account["upload_daily_limit"] - (today[1] if today else 0)
+            ),
+            "resets_timezone": "UTC+08:00",
+        }
+
+    def _session_user(self, db, row, now):
+        if row is None or row["expires_at"] <= now:
+            return None
+        extra = {"role": "admin"}
+        if _text_equal(row["username"], self.config.username):
+            version = self._credential_version
+        else:
+            account = db.execute(
+                "SELECT * FROM trial_accounts WHERE username = ?", (row["username"],)
+            ).fetchone()
+            if not account or not account["enabled"] or not account["expires_at"]:
+                return None
+            if account["expires_at"] <= now:
+                return None
+            version = self._trial_version(account)
+            extra = {
+                "role": "trial",
+                "trial_expires_at": account["expires_at"],
+                "limits": {
+                    "daily_qa": account["daily_limit"],
+                    "total_qa": account["total_limit"],
+                    "daily_uploads": account["upload_daily_limit"],
+                },
+                "usage": self._usage(db, account, now),
+            }
+        if not hmac.compare_digest(row["credential_version"], version):
+            return None
+        # Drawings belong to this exact login. Accounts never share a drawing UID.
+        return {
+            "uid": row["token_hash"],
+            "username": row["username"],
+            "csrf_token": row["csrf"],
+            "expires_at": row["expires_at"],
+            **extra,
+        }
 
     def require_origin(self, request: Request) -> None:
         # Origin is browser-controlled and mandatory on every mutating request,
@@ -160,21 +251,10 @@ class AdminAuth:
             row = db.execute(
                 "SELECT * FROM admin_sessions WHERE token_hash = ?", (digest,)
             ).fetchone()
-            if row is None:
-                return None
-            if row["expires_at"] <= time.time() or not hmac.compare_digest(
-                row["credential_version"], self._credential_version
-            ):
+            user = self._session_user(db, row, time.time())
+            if row is not None and user is None:
                 db.execute("DELETE FROM admin_sessions WHERE token_hash = ?", (digest,))
-                return None
-        # CAD files belong to this exact login, rather than to a permanent admin
-        # UID. Re-login cannot recover drawings from an expired/revoked session.
-        return {
-            "uid": digest,
-            "username": row["username"],
-            "csrf_token": row["csrf"],
-            "expires_at": row["expires_at"],
-        }
+        return user
 
     def require_csrf(self, request: Request, user: dict) -> None:
         self.require_origin(request)
@@ -187,6 +267,7 @@ class AdminAuth:
         # Serializing this small critical section also prevents concurrent
         # password guesses from racing past the failure counter.
         with self._login_lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "DELETE FROM login_failures WHERE failed_at < ?",
                 (now - self.config.failure_window,),
@@ -201,18 +282,50 @@ class AdminAuth:
                     "登录失败次数过多，请稍后再试。",
                     headers={"Retry-After": str(self.config.failure_window)},
                 )
-            # Always verify the hash, including unknown usernames.
-            valid_password = verify_password(password, self.config.password_hash)
-            if not (_text_equal(username, self.config.username) and valid_password):
+            is_admin = _text_equal(username, self.config.username)
+            account = None
+            if not is_admin and re.fullmatch(r"[a-zA-Z0-9_-]{3,32}", username):
+                account = db.execute(
+                    "SELECT * FROM trial_accounts WHERE username = ?", (username,)
+                ).fetchone()
+            encoded = account["password_hash"] if account else self.config.password_hash
+            # Unknown/disabled accounts perform the same password hash work.
+            valid_password = verify_password(password, encoded)
+            available = is_admin or (
+                account is not None
+                and account["enabled"]
+                and (
+                    account["expires_at"] > now
+                    if account["activated_at"] is not None
+                    else account["activate_by"] > now
+                )
+            )
+            if not (available and valid_password):
                 db.execute("INSERT INTO login_failures VALUES (?, ?)", (peer, now))
                 db.commit()
-                raise HTTPException(401, "账号或密码错误。")
+                raise HTTPException(401, "账号或访问密钥错误，或试用已到期/停用。")
+            expires_at = now + self.config.ttl
+            version = self._credential_version
+            if account is not None:
+                if account["activated_at"] is None:
+                    db.execute(
+                        "UPDATE trial_accounts SET activated_at = ?, expires_at = ? "
+                        "WHERE username = ?",
+                        (now, now + account["trial_days"] * 86400, username),
+                    )
+                    account = db.execute(
+                        "SELECT * FROM trial_accounts WHERE username = ?", (username,)
+                    ).fetchone()
+                expires_at = min(expires_at, account["expires_at"])
+                version = self._trial_version(account)
+                # One active login per trial account; quotas survive re-login.
+                db.execute("DELETE FROM admin_sessions WHERE username = ?", (username,))
             token = secrets.token_urlsafe(32)
             user = {
                 "uid": self.token_digest(token),
-                "username": self.config.username,
+                "username": username,
                 "csrf_token": secrets.token_urlsafe(32),
-                "expires_at": now + self.config.ttl,
+                "expires_at": expires_at,
             }
             db.execute(
                 "INSERT INTO admin_sessions VALUES (?, ?, ?, ?, ?)",
@@ -221,10 +334,14 @@ class AdminAuth:
                     user["csrf_token"],
                     user["username"],
                     user["expires_at"],
-                    self._credential_version,
+                    version,
                 ),
             )
             db.execute("DELETE FROM login_failures WHERE peer = ?", (peer,))
+            row = db.execute(
+                "SELECT * FROM admin_sessions WHERE token_hash = ?", (user["uid"],)
+            ).fetchone()
+            user = self._session_user(db, row, now)
         return token, user
 
     def revoke(self, uid: str) -> None:
@@ -233,15 +350,67 @@ class AdminAuth:
 
     def active_uids(self) -> set[str]:
         with self._db() as db:
-            db.execute(
-                "DELETE FROM admin_sessions WHERE expires_at <= ? OR credential_version != ?",
-                (time.time(), self._credential_version),
-            )
+            now = time.time()
+            active = set()
+            for row in db.execute("SELECT * FROM admin_sessions").fetchall():
+                if self._session_user(db, row, now) is None:
+                    db.execute(
+                        "DELETE FROM admin_sessions WHERE token_hash = ?", (row["token_hash"],)
+                    )
+                else:
+                    active.add(row["token_hash"])
             db.execute(
                 "DELETE FROM login_failures WHERE failed_at < ?",
                 (time.time() - self.config.failure_window,),
             )
-            return {row[0] for row in db.execute("SELECT token_hash FROM admin_sessions")}
+            db.execute("DELETE FROM trial_jobs WHERE expires_at <= ?", (now,))
+            return active
+
+    def reserve_trial_request(self, user: dict, kind: str) -> str | None:
+        """Atomically charge a started request and lease one job per account.
+
+        Invalid bodies/ownership and global busy rejection are checked before this.
+        Started requests count even on provider failure, bounding retries and costs.
+        """
+        if kind not in {"qa", "upload"}:
+            raise ValueError("Unsupported trial request")
+        now = time.time()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM admin_sessions WHERE token_hash = ?", (user["uid"],)
+            ).fetchone()
+            current = self._session_user(db, row, now)
+            if current is None:
+                raise HTTPException(401, "登录已过期，请重新登录。")
+            if current["role"] == "admin":
+                return None
+            username = current["username"]
+            db.execute("DELETE FROM trial_jobs WHERE expires_at <= ?", (now,))
+            if db.execute("SELECT 1 FROM trial_jobs WHERE username = ?", (username,)).fetchone():
+                raise HTTPException(429, "当前账号已有任务处理中，请等待完成。")
+            usage = current["usage"]
+            if kind == "qa" and min(usage["daily_qa_remaining"], usage["total_qa_remaining"]) <= 0:
+                raise HTTPException(429, "问答额度已用完，请次日重试或联系管理员。")
+            if kind == "upload" and usage["daily_uploads_remaining"] <= 0:
+                raise HTTPException(429, "今日上传额度已用完，请次日重试。")
+            day = self._day(now)
+            db.execute(
+                "INSERT OR IGNORE INTO trial_usage(username, day) VALUES (?, ?)", (username, day)
+            )
+            db.execute(
+                "UPDATE trial_usage SET qa_count = qa_count + ?, upload_count = upload_count + ? "
+                "WHERE username = ? AND day = ?",
+                (int(kind == "qa"), int(kind == "upload"), username, day),
+            )
+            token = secrets.token_urlsafe(24)
+            db.execute("INSERT INTO trial_jobs VALUES (?, ?, ?)", (username, token, now + 600))
+            return token
+
+    def finish_trial_request(self, lease: str | None) -> None:
+        if lease:
+            with self._db() as db:
+                db.execute("DELETE FROM trial_jobs WHERE token = ?", (lease,))
 
     def set_cookie(self, response: Response, token: str) -> None:
         response.set_cookie(
@@ -261,4 +430,16 @@ class AdminAuth:
 
 
 def public_session(user: dict) -> dict:
-    return {key: user[key] for key in ("username", "csrf_token", "expires_at")}
+    return {
+        key: user[key]
+        for key in (
+            "username",
+            "csrf_token",
+            "expires_at",
+            "role",
+            "trial_expires_at",
+            "limits",
+            "usage",
+        )
+        if key in user
+    }

@@ -420,16 +420,31 @@ class DeepSeekQA:
         handles = []
         view_ids = []
         answer = content
+        result = None
         try:
             result = json.loads(cleaned)
-            if isinstance(result, dict) and isinstance(result.get("answer"), str):
-                answer = result["answer"]
-                if isinstance(result.get("view_ids"), list):
-                    view_ids = [v for v in result["view_ids"] if isinstance(v, str)]
-                if isinstance(result.get("evidence_handles"), list):
-                    handles = [h for h in result["evidence_handles"] if isinstance(h, str)]
         except ValueError:
-            pass
+            # Some provider responses prepend prose to the requested JSON. Use
+            # only a complete trailing answer object, not arbitrary JSON snippets.
+            decoder = json.JSONDecoder()
+            for match in reversed(list(re.finditer(r"\{", cleaned))):
+                try:
+                    candidate, end = decoder.raw_decode(cleaned[match.start() :])
+                except ValueError:
+                    continue
+                if (
+                    isinstance(candidate, dict)
+                    and isinstance(candidate.get("answer"), str)
+                    and not cleaned[match.start() + end :].strip()
+                ):
+                    result = candidate
+                    break
+        if isinstance(result, dict) and isinstance(result.get("answer"), str):
+            answer = result["answer"]
+            if isinstance(result.get("view_ids"), list):
+                view_ids = [v for v in result["view_ids"] if isinstance(v, str)]
+            if isinstance(result.get("evidence_handles"), list):
+                handles = [h for h in result["evidence_handles"] if isinstance(h, str)]
         handles.extend(re.findall(r"\[图元\s+([A-Fa-f0-9]+)\]", answer))
         observed = {h.upper(): record for h, record in drawing.observed.items()}
         valid = list(dict.fromkeys(h.upper() for h in handles if h.upper() in observed))

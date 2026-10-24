@@ -171,3 +171,87 @@ def test_visual_citations_are_not_buried_under_unrequested_entity_samples(multiv
     )
     assert [e["handle"] for e in result["evidence"]] == ["view-1"]
     assert result["highlight_handles"] == []
+
+
+def test_previews_reuse_only_same_context_and_source_without_leaking_evidence(
+    monkeypatch, multiview
+):
+    import web.backend.cad_visual as visual
+
+    first = DrawingViews(multiview)
+    first.prepare()
+    first.render(ViewArgs(x0=0.5))
+    cache = first.cache
+    assert cache.bytes > 0
+    assert "_qa_render_cache" not in multiview.model_dump()
+    # An independent upload/context must never acquire another session's images.
+    other = DrawingViews(load_dxf(multiview.file_path))
+    assert other.cache is not cache and not other.cache.entries
+
+    def forbidden_read(_):
+        raise AssertionError("A cached preview must not reopen the source DXF")
+
+    monkeypatch.setattr(visual, "prepare_render_document", forbidden_read)
+    second = DrawingViews(multiview)
+    assert second.views == {}  # Old view IDs are not automatically accepted as evidence.
+    second.prepare()
+    assert second.doc is None and second.cache_hits == 2
+    second.render(ViewArgs(x0=0.5))
+    assert second.cache_hits == 3 and second.rendered == 0
+    assert second.views["view-3"]["image"] == first.views["view-3"]["image"]
+    assert second.views["view-3"] is not first.views["view-3"]
+    changed = ezdxf.readfile(multiview.file_path)
+    changed.modelspace().add_line((0, 0), (999, 999))
+    changed.saveas(multiview.file_path)
+    assert DrawingViews(multiview).cache is not cache
+
+
+def test_region_rendering_never_copies_or_crops_shared_vector_records(monkeypatch, multiview):
+    from ezdxf.addons.drawing.recorder import Player
+
+    def forbidden(*_):
+        raise AssertionError("Full-sheet deep-copy/destructive crop reintroduced")
+
+    monkeypatch.setattr(Player, "copy", forbidden)
+    monkeypatch.setattr(Player, "crop_rect", forbidden)
+    views = DrawingViews(multiview)
+    views.prepare()
+    original = tuple(views.players["Model"].records)
+    bounds = views.record_bounds["Model"].copy()
+    result = views.render(ViewArgs(x0=0.5))
+    assert "error" not in result
+    assert tuple(views.players["Model"].records) == original
+    assert (views.record_bounds["Model"] == bounds).all()
+    assert has_ink(png(views.views[result["id"]]))
+
+
+def test_cache_evicts_by_byte_budget_and_entry_count(monkeypatch):
+    import web.backend.cad_visual as visual
+
+    monkeypatch.setattr(visual, "MAX_CACHE_BYTES", 12)
+    monkeypatch.setattr(visual, "MAX_CACHED_VIEWS", 2)
+    cache = visual.RenderCache(("test",))
+    for key in range(5):
+        cache.put(key, {"image": "12345"})
+    assert list(cache.entries) == [3, 4]
+    assert cache.bytes == 10
+    cache.put(5, {"image": "12345678"})
+    assert list(cache.entries) == [5] and cache.bytes == 8
+    cache.put(6, {"image": "x" * 13})
+    assert list(cache.entries) == [5] and cache.bytes == 8
+
+
+def test_dense_sheet_has_full_coverage_before_first_model_call(multiview):
+    doc = ezdxf.readfile(multiview.file_path)
+    for index in range(1000):
+        doc.modelspace().add_line((index / 10, 0), (index / 10, 10))
+    doc.saveas(multiview.file_path)
+    context = load_dxf(multiview.file_path)
+    views = DrawingViews(context)
+    views.prepare_overview()
+    assert len(views.views) == 6  # Model + another layout + four overlapping regions.
+    followup = DrawingViews(context)
+    followup.prepare()
+    followup.reuse_prepared_regions()
+    assert followup.cache_hits == 6 and followup.rendered == 0
+    assert followup.doc is None

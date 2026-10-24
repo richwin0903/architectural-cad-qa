@@ -323,3 +323,19 @@ def test_route_enforces_session_owner_and_validates_input(drawing, monkeypatch):
     result = client.post("/api/local-qa", json={"session_id": "owned", "question": "统计"})
     assert result.status_code == 200
     assert received == [drawing.context]
+
+
+def test_prose_before_answer_json_is_not_displayed_twice_and_citations_stay_checked(drawing):
+    tools = DrawingTools(drawing.context)
+    tools.measure(drawing.rectangle)
+    payload = json.dumps(
+        {
+            "answer": f"面积 24㎡ [图元 {drawing.rectangle}]。",
+            "evidence_handles": [drawing.rectangle, "NONEXISTENT"],
+        },
+        ensure_ascii=False,
+    )
+    result = DeepSeekQA()._final("重复的解释正文。\n\n" + payload, tools, [])
+    assert result["answer"] == f"面积 24㎡ [图元 {drawing.rectangle}]。"
+    assert result["highlight_handles"] == [drawing.rectangle]
+    assert any("未核验" in warning for warning in result["warnings"])

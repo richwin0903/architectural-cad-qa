@@ -6,7 +6,7 @@ from enum import IntEnum, StrEnum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 if TYPE_CHECKING:
     from ..core.entity_index import EntityIndex
@@ -297,6 +297,9 @@ class LoadWarning(BaseModel):
 
 class DrawingContext(BaseModel):
     """Normalized context model for a loaded DXF drawing."""
+
+    # Session-owned render artifacts only; excluded from serialization/model input.
+    _qa_render_cache: Any = PrivateAttr(default=None)
 
     file_path: str
     drawing_unit: DrawingUnit = Field(

@@ -115,6 +115,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState([]);
   const [asking, setAsking] = useState(false);
+  const [waitSeconds, setWaitSeconds] = useState(0);
   const [askError, setAskError] = useState('');
   const inputRef = useRef(null);
   const questionRef = useRef(null);
@@ -219,6 +220,13 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
     finally { setDemoLoading(false); }
   }
 
+  useEffect(() => {
+    if (!asking) return undefined;
+    const started = Date.now();
+    const timer = window.setInterval(() => setWaitSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [asking]);
+
   async function submitQuestion(event) {
     event?.preventDefault();
     const prompt = question.trim();
@@ -226,6 +234,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
     const history = messages.filter((message) => !message.failed).map(({ role, content }) => ({ role, content })).slice(-12);
     setMessages((current) => [...current, { role: 'user', content: prompt }]);
     setQuestion('');
+    setWaitSeconds(0);
     setAsking(true);
     setAskError('');
     try {
@@ -313,10 +322,10 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
           {!messages.length && <div className="lqa-chat-welcome"><div className="lqa-welcome-heading"><div className="lqa-welcome-mark">✦</div><span>从一个好问题开始</span></div><h3>{session ? '图纸已就绪，想了解什么？' : '把找图纸，变成问图纸。'}</h3><p>{session ? '选择一个问题，或输入你想了解的内容。' : '上传一张图纸，试着用自然语言探索其中的信息。'}</p><div className="lqa-question-cards">{STARTER_QUESTIONS.map((item) => <button key={item.label} disabled={!session || uploading || asking} onClick={() => { setQuestion(item.question); questionRef.current?.focus(); }}><span className="lqa-question-icon"><Icon name={item.icon} size={20} /></span><span className="lqa-question-copy"><strong>{item.label}</strong><small>{item.description}</small></span><Icon name="arrow" size={17} /></button>)}</div><div className="lqa-expectation"><Icon name="target" size={16} /><p>回答基于图纸中的真实信息；点击依据，即可回到图元位置核对。</p></div></div>}
 
           {messages.map((message, index) => <article className={`lqa-message lqa-message--${message.role}`} key={index}>
-            <div className="lqa-message-who">{message.role === 'user' ? <><span className="lqa-message-avatar">你</span>你的问题</> : <><span className="lqa-assistant-mark">✦</span> 图纸助手</>}</div>
+            <div className="lqa-message-who">{message.role === 'user' ? <><span className="lqa-message-avatar">你</span>你的问题</> : <><span className="lqa-assistant-mark">✦</span> 图纸助手{Number.isFinite(message.data?.performance?.total_seconds) && <span className="lqa-model-name"> · {message.data.performance.total_seconds.toFixed(1)} 秒</span>}</>}</div>
             {message.role === 'user' ? <p className="lqa-user-text">{message.content}</p> : <><AnswerText text={message.content} />{message.data?.warnings?.length > 0 && <div className="lqa-answer-warnings"><strong>需要核对</strong>{message.data.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</div>}<Evidence items={message.data?.evidence} onLocate={locate} />{message.data?.tools_used?.length > 0 && <details className="lqa-tools"><summary>查看查询过程 · {message.data.tools_used.length} 次工具调用</summary>{message.data.tools_used.map((tool, i) => <div key={i}><strong>{tool.name}</strong><p>{typeof tool.summary === 'string' ? tool.summary : JSON.stringify(tool.summary)}</p><code>{JSON.stringify(tool.args || {})}</code></div>)}</details>}</>}
           </article>)}
-          {asking && <div className="lqa-thinking" role="status"><span className="lqa-spinner" /><div><strong>正在检索图纸并组织回答</strong><p>读取相关图元、查询数据，通常需要几十秒…</p></div></div>}
+          {asking && <div className="lqa-thinking" role="status"><span className="lqa-spinner" /><div><strong>正在检索图纸并组织回答</strong><p>已等待 {waitSeconds} 秒 · 正在核对图纸，复杂问题可能需要更久。</p></div></div>}
           {askError && <div className="lqa-banner lqa-banner--error" role="alert"><strong>本次问答未成功</strong><p>{askError}</p><span>问题已保留在输入框，可重新发送。</span></div>}
           <div ref={chatEndRef} />
         </div>

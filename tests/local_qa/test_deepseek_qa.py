@@ -166,7 +166,9 @@ def test_real_api_payload_tool_loop_and_verified_evidence(monkeypatch, drawing):
                     ]
                 },
             )
-        tool_result = json.loads(payload["messages"][-1]["content"])
+        tool_result = json.loads(
+            next(m["content"] for m in reversed(payload["messages"]) if m["role"] == "tool")
+        )
         assert tool_result["total"] == 61
         handle = tool_result["sample_entities"][0]["handle"]
         return httpx.Response(
@@ -175,13 +177,14 @@ def test_real_api_payload_tool_loop_and_verified_evidence(monkeypatch, drawing):
                 "choices": [
                     {
                         "message": {
+                            "role": "assistant",
                             "content": json.dumps(
                                 {
                                     "answer": f"有 61 个该图块实例 [图元 {handle}]。",
                                     "evidence_handles": [handle, "NONEXISTENT"],
                                 },
                                 ensure_ascii=False,
-                            )
+                            ),
                         }
                     }
                 ]
@@ -248,6 +251,7 @@ def test_tool_loop_has_hard_limit(monkeypatch, drawing):
                 "choices": [
                     {
                         "message": {
+                            "role": "assistant",
                             "tool_calls": [
                                 {
                                     "id": f"call_{len(calls)}",

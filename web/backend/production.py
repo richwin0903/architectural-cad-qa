@@ -90,6 +90,9 @@ def parse_readonly_upload(file, user, session_manager, *, max_bytes, render_limi
             )
             if preview.success:
                 drawing.original_render = preview.output_path
+            drawing.file_info["preview_warnings"] = preview.quality_warnings
+            if not preview.success:
+                drawing.file_info["preview_warnings"].append("静态预览生成失败，请核对原始 CAD。")
         except Exception:
             logging.getLogger(__name__).warning("Drawing static preview is unavailable")
     return {"session_id": drawing.session_id, "file_info": drawing.file_info}

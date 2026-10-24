@@ -28,6 +28,7 @@ services:
       CAD_CJK_FONT: /app/fonts/NotoSansSC-Regular.ttf
       CAD_DWG_CONVERTER: libredwg
       CAD_DWG_EXECUTABLE: /usr/local/bin/dwg2dxf
+      # Disable the retained upstream Gemini pipeline; CAD QA uses DeepSeek images.
       CAD_VISION_ENABLED: "false"
       CAD_LOG_LEVEL: WARNING
       OTEL_ENABLED: "false"

@@ -22,7 +22,11 @@ async def local_status():
         "dwg_available": dwg_executable() is not None,
         "dwg_converter": "LibreDWG" if dwg_executable() is not None else None,
         "mode": "read_only",
-        "data_notice": "提问时，相关图纸文字、图元属性和工具结果会发送至 DeepSeek API。",
+        "engine": "deepagents",
+        "data_notice": (
+            "提问时，整图预览、局部截图、相关图元文字属性、工具结果和对话"
+            "会发送至 DeepSeek API；不发送原始 CAD 文件。"
+        ),
     }
 
 

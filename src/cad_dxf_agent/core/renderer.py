@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from .cjk_font import cjk_font_path, register_cjk_font
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
+RENDER_LOCK = threading.RLock()
 
 
 @dataclass
@@ -35,6 +37,37 @@ class RenderResult:
     success: bool
     error: str | None = None
     quality_warnings: list[str] = field(default_factory=list)
+
+
+def prepare_render_document(dxf_path: str | Path):
+    """Prepare an in-memory render copy; never rewrite the uploaded drawing.
+
+    Native DWG conversion sometimes leaves dangling/empty INSERT references.
+    Ignore just these unrenderable references, including inside blocks, instead
+    of losing the entire sheet. Callers must surface the incomplete-render note.
+    """
+    doc = ezdxf.readfile(str(dxf_path))
+    skipped = 0
+    for block in doc.blocks:
+        for entity in list(block):
+            if entity.dxftype() == "INSERT" and entity.dxf.name not in doc.blocks:
+                block.unlink_entity(entity)
+                skipped += 1
+    font_path = cjk_font_path()
+    if font_path.is_file() or os.environ.get("CAD_CJK_FONT"):
+        font_name = register_cjk_font(font_path)
+        for style in doc.styles:
+            style.dxf.font = font_name
+            style.dxf.bigfont = ""
+            style.discard_extended_font_data()
+    warnings = []
+    if skipped:
+        warnings.append(
+            f"预览跳过了 {skipped} 个缺失定义的图块引用；相关内容不可见，需对照原始 CAD。"
+        )
+    if any(entity.dxftype() == "IMAGE" for block in doc.blocks for entity in block):
+        warnings.append("外部栅格图片仅显示代理边框，不加载图纸引用的外部文件。")
+    return doc, warnings
 
 
 def render_dxf_to_png(
@@ -127,18 +160,7 @@ def _render(
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            doc = ezdxf.readfile(str(dxf_path))
-
-            # Rendering uses an in-memory document: uploads and their text styles
-            # remain unchanged. A shared open font avoids platform-specific font
-            # substitution and missing Chinese glyphs in PNG/PDF previews.
-            font_path = cjk_font_path()
-            if font_path.is_file() or os.environ.get("CAD_CJK_FONT"):
-                font_name = register_cjk_font(font_path)
-                for style in doc.styles:
-                    style.dxf.font = font_name
-                    style.dxf.bigfont = ""
-                    style.discard_extended_font_data()
+            doc, render_warnings = prepare_render_document(dxf_path)
 
             if layout_name:
                 try:
@@ -154,19 +176,15 @@ def _render(
             else:
                 layout = doc.modelspace()
 
-            from ezdxf.addons.drawing.matplotlib import qsave
+            from .batch_render import save_layout
 
-            qsave(
-                layout,
-                str(output_path),
-                dpi=dpi,
-                bg=background,
-            )
+            with RENDER_LOCK:
+                save_layout(layout, str(output_path), dpi=dpi, background=background)
 
             span.set_attribute("cad.render.output_basename", output_path.name)
             logger.info("Rendered %s → %s (%d dpi)", dxf_path.name, output_path, dpi)
 
-            quality_warnings = _check_render_quality(output_path)
+            quality_warnings = render_warnings + _check_render_quality(output_path)
             for w in quality_warnings:
                 logger.warning("Render quality: %s", w)
 

@@ -15,6 +15,12 @@ npm 与系统依赖仍适用各自随包提供的许可证。本文件不将所�
 调整发生在运行时，不修改字体二进制。字体可以随应用一起分发，但需要保留版权和 OFL；
 OFL 对字体本身单独售卖、改名和再许可有具体条件，以完整许可文本为准。
 
+## 问答框架依赖
+
+问答使用 [LangChain Deep Agents](https://github.com/langchain-ai/deepagents) 及
+[langchain-deepseek](https://github.com/langchain-ai/langchain)（MIT 许可），
+通过 Python 包安装，许可证随各包保留。模型 API 使用仍适用服务提供商的条款。
+
 ## GNU LibreDWG 的构建与分发
 
 `vendor/` 保留官方压缩源码、签名和验证用 GNU 公钥环。版本、来源、SHA-256 和

@@ -39,7 +39,9 @@ jobs:
           python -m ruff check
           web/backend/admin_auth.py web/backend/production.py
           web/backend/production_dwg.py web/backend/deepseek_qa.py
-          web/backend/local_support.py src/cad_dxf_agent/core/cjk_font.py
+          web/backend/local_support.py web/backend/cad_deep_agent.py web/backend/cad_visual.py
+          src/cad_dxf_agent/core/cjk_font.py src/cad_dxf_agent/core/batch_render.py
+          src/cad_dxf_agent/core/renderer.py
           tests/deployment tests/local_qa tests/packaging scripts
       - name: Run offline backend regressions
         run: python -m pytest tests/local_qa tests/deployment tests/web tests/packaging -q --tb=short --disable-socket --allow-unix-socket

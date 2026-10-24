@@ -68,6 +68,7 @@ function AnswerText({ text }) {
 }
 
 function validBounds(evidence) {
+  if (evidence.space && evidence.space !== 'Model') return null;
   const bounds = evidence.bounds;
   if (bounds && ['minX', 'minY', 'maxX', 'maxY'].every((key) => Number.isFinite(bounds[key]))) return bounds;
   return null;
@@ -82,7 +83,7 @@ function Evidence({ items, onLocate }) {
     <div className="lqa-evidence-list">{visible.map((item, index) => {
       const bounds = validBounds(item);
       return <div className="lqa-evidence-row" key={`${item.handle || item.entity_handle || 'item'}-${index}`}>
-        <div><span className="lqa-evidence-label">{item.label || item.text_excerpt || item.text || item.entity_type || '图元'}</span><span className="lqa-evidence-meta">{item.entity_type || 'ENTITY'} · {item.layer || '未指定图层'} · #{item.handle || item.entity_handle || '—'}</span></div>
+        <div><span className="lqa-evidence-label">{item.label || item.text_excerpt || item.text || item.entity_type || '图元'}</span><span className="lqa-evidence-meta">{item.entity_type === 'VIEW' ? '视图' : item.entity_type || 'ENTITY'} · {item.entity_type === 'VIEW' ? item.space : item.layer || '未指定图层'} · #{item.handle || item.entity_handle || '—'}</span></div>
         {bounds && <button className="lqa-locate" onClick={() => onLocate(bounds)} title="在图纸中定位" aria-label={`定位 ${item.label || item.handle || '图元'}`}><Icon name="target" size={14} /><span>定位</span></button>}
       </div>;
     })}</div>
@@ -276,7 +277,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
     </header>
     <div className="lqa-main-content">
     <section className="lqa-intro"><div><span className="lqa-eyebrow"><span />让专业知识，遇见 AI</span><h2>让图纸里的信息，<em>清晰可见。</em></h2><p>读懂文字与图块，计算几何信息，让每一个回答都有迹可循。</p></div><div className="lqa-steps"><span><b>01</b>上传图纸</span><Icon name="arrow" size={16} /><span><b>02</b>自然提问</span><Icon name="arrow" size={16} /><span><b>03</b>定位依据</span></div></section>
-    {guideOpen && <section className="lqa-guide" id="lqa-guide" aria-label="使用指南"><div className="lqa-guide-heading"><h2>三步，开始读懂一张图纸</h2><button className="lqa-icon-button" aria-label="关闭使用指南" onClick={() => setGuideOpen(false)}><Icon name="close" size={18} /></button></div><div className="lqa-guide-grid"><div><span>01 / 上传</span><h3>选择你的 CAD 图纸</h3><p>支持 DXF，服务可用时也支持 DWG 自动转换。最大 25 MB；初次体验可以使用合成建筑示例。</p></div><div><span>02 / 提问</span><h3>从具体的问题开始</h3><p>询问房间文字、图层、图块数量或闭合轮廓面积。明确对象名称，更容易找到相关信息。</p></div><div><span>03 / 核对</span><h3>回到图纸，查看依据</h3><p>点击回答下方的“定位”，在交互图纸中核对图元。几何面积不等同于建筑净面积，复杂图纸需人工复核。</p></div></div><p className="lqa-guide-privacy">图纸在服务器解析；相关结构化图元、文字、属性和对话会发送至 DeepSeek。请使用有权处理的公开或脱敏图纸。</p></section>}
+    {guideOpen && <section className="lqa-guide" id="lqa-guide" aria-label="使用指南"><div className="lqa-guide-heading"><h2>三步，开始读懂一张图纸</h2><button className="lqa-icon-button" aria-label="关闭使用指南" onClick={() => setGuideOpen(false)}><Icon name="close" size={18} /></button></div><div className="lqa-guide-grid"><div><span>01 / 上传</span><h3>选择你的 CAD 图纸</h3><p>支持 DXF，服务可用时也支持 DWG 自动转换。最大 25 MB；初次体验可以使用合成建筑示例。</p></div><div><span>02 / 提问</span><h3>从具体的问题开始</h3><p>询问房间文字、图层、图块数量或闭合轮廓面积。明确对象名称，更容易找到相关信息。</p></div><div><span>03 / 核对</span><h3>回到图纸，查看依据</h3><p>点击回答下方的“定位”，在交互图纸中核对图元。几何面积不等同于建筑净面积，复杂图纸需人工复核。</p></div></div><p className="lqa-guide-privacy">图纸在服务器解析；整图预览、局部截图、相关图元文字属性和对话会发送至 DeepSeek，原始 CAD 文件不发送。请使用有权处理的公开或脱敏图纸。</p></section>}
 
     {statusError && <div className="lqa-banner lqa-banner--error" role="alert">{statusError}</div>}
     {status && !status.configured && <div className="lqa-banner" role="status">后端尚未配置模型密钥。可以先上传并查看图纸，问答需要完成模型配置。</div>}
@@ -299,6 +300,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
           <div className="lqa-preview">
             {previewLoading ? <div className="lqa-preview-notice"><div className="lqa-spinner" /><span>正在生成图纸预览…</span></div> : previewErrors[previewMode] ? <div className="lqa-preview-notice"><Icon name="file" size={30} /><p>{previewErrors[previewMode]}</p></div> : previewMode === 'interactive' && (fontState === 'idle' || fontState === 'loading') ? <div className="lqa-preview-notice"><div className="lqa-spinner" /><span>正在加载开源中文字体…</span></div> : previewMode === 'interactive' && dxfUrl ? <DxfViewerComponent ref={viewerRef} dxfUrl={dxfUrl} fontUrls={fontUrls} fileEncoding={fileInfo.dxf_encoding || 'utf-8'} locale="zh" onReady={({ hasMissingChars }) => { setViewerMissingChars(hasMissingChars); if (pendingBoundsRef.current) { viewerRef.current?.focusOnBounds(pendingBoundsRef.current); pendingBoundsRef.current = null; } }} /> : pngUrl ? <img src={pngUrl} alt={`${fileInfo.filename} 的原始图纸预览`} /> : <div className="lqa-preview-notice">暂无预览</div>}
           </div>
+          {fileInfo.preview_warnings?.map((warning, i) => <p className="lqa-warning" key={i}>{warning}</p>)}
           <div className="lqa-drawing-footer"><span><span className="lqa-dot lqa-dot--verified" />图纸已解析</span><span>{previewMode === 'interactive' ? (viewerMissingChars || fontState === 'unavailable' ? '部分字符缺少字形，请用静态预览核对' : '滚轮缩放 · 拖动平移 · 点击依据定位') : '点击答案依据，可切换到交互图纸定位'}</span></div>
           <details className="lqa-layers"><summary>查看图层 <span>{fileInfo.layer_count || 0}</span></summary><div>{fileInfo.layers?.map((layer) => <span key={layer}>{layer}</span>)}</div></details>
         </>}
@@ -318,7 +320,7 @@ export default function LocalQa({ adminUsername, onLogout, loggingOut = false })
           {askError && <div className="lqa-banner lqa-banner--error" role="alert"><strong>本次问答未成功</strong><p>{askError}</p><span>问题已保留在输入框，可重新发送。</span></div>}
           <div ref={chatEndRef} />
         </div>
-        <form className="lqa-composer" onSubmit={submitQuestion}><label htmlFor="lqa-question" className="sr-only">向图纸提问</label><div className="lqa-input-box"><textarea ref={questionRef} id="lqa-question" placeholder={session ? '例如：这张图有哪些房间名称？' : '请先上传一张图纸…'} value={question} onChange={(event) => setQuestion(event.target.value)} disabled={!session || asking || uploading} rows={3} maxLength={4000} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submitQuestion(); } }} /><div className="lqa-input-footer"><span>Enter 发送 · Shift + Enter 换行</span><button type="submit" aria-label="发送问题" disabled={!session || !question.trim() || asking || uploading || status?.configured === false}><Icon name="send" size={20} /></button></div></div><p>相关结构化图元、文字、属性和对话将发送到 DeepSeek；请结合原图复核。</p></form>
+        <form className="lqa-composer" onSubmit={submitQuestion}><label htmlFor="lqa-question" className="sr-only">向图纸提问</label><div className="lqa-input-box"><textarea ref={questionRef} id="lqa-question" placeholder={session ? '例如：这个 CAD 文件里面有什么图？' : '请先上传一张图纸…'} value={question} onChange={(event) => setQuestion(event.target.value)} disabled={!session || asking || uploading} rows={3} maxLength={4000} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submitQuestion(); } }} /><div className="lqa-input-footer"><span>Enter 发送 · Shift + Enter 换行</span><button type="submit" aria-label="发送问题" disabled={!session || !question.trim() || asking || uploading || status?.configured === false}><Icon name="send" size={20} /></button></div></div><p>整图预览、局部截图、相关图元与对话将发送到 DeepSeek；请结合原图复核。</p></form>
       </section>
     </div>
     <footer className="lqa-page-footer"><span>图纸知间 <span className="lqa-footer-divider">/</span> 基于 cad-ai-agent</span><span>几何结果不等于建筑净面积 · 关键结论请结合原图复核</span></footer>

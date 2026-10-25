@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import LocalQa from './LocalQa';
+import { MODEL_DATA_NOTICE, TRIAL_RECORD_NOTICE } from '../lib/qaPrivacy';
 import { clearAdminSession, getAdminSession, loginAdmin, logoutAdmin, setAdminSession } from '../lib/localQaApi';
 import '../styles/local-qa.css';
 import '../styles/local-qa-auth.css';
@@ -127,7 +128,7 @@ function Login({ onLogin }) {
           </form>
           <div className="lqa-auth-security"><AuthIcon type="lock" /><span>{secure ? 'HTTPS 安全连接 · 仅授权账号可访问' : '请使用 HTTPS 安全连接'}</span></div>
         </div>
-        <div className="lqa-auth-data-note"><span>关于你的图纸数据</span><p>图纸在服务器转换与解析。问答会把相关结构化图元、文字、属性和对话发送到 DeepSeek。请使用你有权分享的图纸。</p></div>
+        <div className="lqa-auth-data-note"><span>关于你的图纸数据与试用记录</span><p>{MODEL_DATA_NOTICE}</p><p>{TRIAL_RECORD_NOTICE}</p></div>
       </section>
     </div>
     <footer className="lqa-auth-footer"><span>BUILT FOR ARCHITECTURAL CURIOSITY</span><span>建筑图纸问答 · 只读探索</span></footer>

@@ -76,11 +76,39 @@ export async function uploadLocalDrawing(file) {
   return (await localRequest('/api/upload', { method: 'POST', body })).json();
 }
 
-export async function askLocalDrawing(sessionId, question, history) {
-  return (await localRequest('/api/local-qa', {
+export async function askLocalDrawing(sessionId, question, history, onProgress) {
+  const requestId = crypto.randomUUID().replaceAll('-', '');
+  let finished = false;
+  let checking = false;
+  onProgress?.({ state: 'submitted' });
+  const timer = window.setInterval(async () => {
+    if (finished || checking) return;
+    checking = true;
+    try {
+      const status = await (await localRequest(`/api/qa-status/${requestId}`, { timeout: 5_000 })).json();
+      if (!finished) onProgress?.(status);
+    } catch { /* The POST remains authoritative; admission can precede status polling. */ }
+    finally { checking = false; }
+  }, 2_000);
+  try {
+    return await (await localRequest('/api/local-qa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, question, history, request_id: requestId }),
+      timeout: 300_000,
+    })).json();
+  } finally {
+    finished = true;
+    window.clearInterval(timer);
+  }
+}
+
+export async function sendQaFeedback(requestId, helpful) {
+  return (await localRequest('/api/qa-feedback', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, question, history }),
+    body: JSON.stringify({ request_id: requestId, helpful }),
+    timeout: 10_000,
   })).json();
 }
 

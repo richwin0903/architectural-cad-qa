@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import DxfViewerComponent from './DxfViewerComponent';
-import { askLocalDrawing, getLocalDemo, getLocalFont, getLocalPreview, getLocalStatus, uploadLocalDrawing } from '../lib/localQaApi';
+import { askLocalDrawing, getLocalDemo, getLocalFont, getLocalPreview, getLocalStatus, sendQaFeedback, uploadLocalDrawing } from '../lib/localQaApi';
+import { MODEL_DATA_NOTICE, TRIAL_RECORD_NOTICE } from '../lib/qaPrivacy';
 import '../styles/local-qa.css';
 
 const STARTER_QUESTIONS = [
@@ -91,6 +92,22 @@ function Evidence({ items, onLocate }) {
   </div>;
 }
 
+function AnswerFeedback({ requestId }) {
+  const [rating, setRating] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!requestId) return null;
+  async function rate(helpful) {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try { await sendQaFeedback(requestId, helpful); setRating(helpful); }
+    catch (failure) { setError(failure.message); }
+    finally { setBusy(false); }
+  }
+  return <div className="lqa-feedback"><span>这个回答对你有帮助吗？</span><button type="button" disabled={busy} aria-pressed={rating === true} onClick={() => rate(true)}>有用</button><button type="button" disabled={busy} aria-pressed={rating === false} onClick={() => rate(false)}>没用</button>{rating !== null && <small role="status">反馈已记录，可修改</small>}{error && <small role="alert">{error}</small>}</div>;
+}
+
 export default function LocalQa({ adminUsername, account, onAccountRefresh, onLogout, loggingOut = false }) {
   const [focusMode, setFocusMode] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
@@ -116,6 +133,7 @@ export default function LocalQa({ adminUsername, account, onAccountRefresh, onLo
   const [messages, setMessages] = useState([]);
   const [asking, setAsking] = useState(false);
   const [waitSeconds, setWaitSeconds] = useState(0);
+  const [qaProgress, setQaProgress] = useState(null);
   const [askError, setAskError] = useState('');
   const inputRef = useRef(null);
   const questionRef = useRef(null);
@@ -238,7 +256,7 @@ export default function LocalQa({ adminUsername, account, onAccountRefresh, onLo
     setAsking(true);
     setAskError('');
     try {
-      const data = await askLocalDrawing(session.session_id, prompt, history);
+      const data = await askLocalDrawing(session.session_id, prompt, history, setQaProgress);
       setMessages((current) => [...current, { role: 'assistant', content: data.answer, data }]);
       setModelVerified(true);
       setStatus((current) => ({ ...current, model: data.model || current?.model, configured: true }));
@@ -286,7 +304,7 @@ export default function LocalQa({ adminUsername, account, onAccountRefresh, onLo
     </header>
     <div className="lqa-main-content">
     <section className="lqa-intro"><div><span className="lqa-eyebrow"><span />让专业知识，遇见 AI</span><h2>让图纸里的信息，<em>清晰可见。</em></h2><p>读懂文字与图块，计算几何信息，让每一个回答都有迹可循。</p></div><div className="lqa-steps"><span><b>01</b>上传图纸</span><Icon name="arrow" size={16} /><span><b>02</b>自然提问</span><Icon name="arrow" size={16} /><span><b>03</b>定位依据</span></div></section>
-    {guideOpen && <section className="lqa-guide" id="lqa-guide" aria-label="使用指南"><div className="lqa-guide-heading"><h2>三步，开始读懂一张图纸</h2><button className="lqa-icon-button" aria-label="关闭使用指南" onClick={() => setGuideOpen(false)}><Icon name="close" size={18} /></button></div><div className="lqa-guide-grid"><div><span>01 / 上传</span><h3>选择你的 CAD 图纸</h3><p>支持 DXF，服务可用时也支持 DWG 自动转换。最大 25 MB；初次体验可以使用合成建筑示例。</p></div><div><span>02 / 提问</span><h3>从具体的问题开始</h3><p>询问房间文字、图层、图块数量或闭合轮廓面积。明确对象名称，更容易找到相关信息。</p></div><div><span>03 / 核对</span><h3>回到图纸，查看依据</h3><p>点击回答下方的“定位”，在交互图纸中核对图元。几何面积不等同于建筑净面积，复杂图纸需人工复核。</p></div></div><p className="lqa-guide-privacy">图纸在服务器解析；整图预览、局部截图、相关图元文字属性和对话会发送至 DeepSeek，原始 CAD 文件不发送。请使用有权处理的公开或脱敏图纸。</p></section>}
+    {guideOpen && <section className="lqa-guide" id="lqa-guide" aria-label="使用指南"><div className="lqa-guide-heading"><h2>三步，开始读懂一张图纸</h2><button className="lqa-icon-button" aria-label="关闭使用指南" onClick={() => setGuideOpen(false)}><Icon name="close" size={18} /></button></div><div className="lqa-guide-grid"><div><span>01 / 上传</span><h3>选择你的 CAD 图纸</h3><p>支持 DXF，服务可用时也支持 DWG 自动转换。最大 25 MB；初次体验可以使用合成建筑示例。</p></div><div><span>02 / 提问</span><h3>从具体的问题开始</h3><p>询问房间文字、图层、图块数量或闭合轮廓面积。明确对象名称，更容易找到相关信息。</p></div><div><span>03 / 核对</span><h3>回到图纸，查看依据</h3><p>点击回答下方的“定位”，在交互图纸中核对图元。几何面积不等同于建筑净面积，复杂图纸需人工复核。</p></div></div><p className="lqa-guide-privacy">{MODEL_DATA_NOTICE}</p><p className="lqa-guide-privacy">{TRIAL_RECORD_NOTICE}</p></section>}
 
     {account?.role === 'trial' && <div className="lqa-banner lqa-trial-summary" role="status"><strong>限量试用</strong><span>今日问答剩余 {account.usage?.daily_qa_remaining} / {account.limits?.daily_qa} 次 · 累计剩余 {account.usage?.total_qa_remaining} 次 · 今日上传剩余 {account.usage?.daily_uploads_remaining} 次</span><span>试用到期：{new Date(account.trial_expires_at * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）</span><small>每日额度于北京时间零点刷新；开始处理即计次，失败也计入。每次登录只保留最近成功上传的图纸，新登录会撤销旧登录。</small></div>}
     {statusError && <div className="lqa-banner lqa-banner--error" role="alert">{statusError}</div>}
@@ -323,14 +341,14 @@ export default function LocalQa({ adminUsername, account, onAccountRefresh, onLo
           {!messages.length && <div className="lqa-chat-welcome"><div className="lqa-welcome-heading"><div className="lqa-welcome-mark">✦</div><span>从一个好问题开始</span></div><h3>{session ? '图纸已就绪，想了解什么？' : '把找图纸，变成问图纸。'}</h3><p>{session ? '选择一个问题，或输入你想了解的内容。' : '上传一张图纸，试着用自然语言探索其中的信息。'}</p><div className="lqa-question-cards">{STARTER_QUESTIONS.map((item) => <button key={item.label} disabled={!session || uploading || asking} onClick={() => { setQuestion(item.question); questionRef.current?.focus(); }}><span className="lqa-question-icon"><Icon name={item.icon} size={20} /></span><span className="lqa-question-copy"><strong>{item.label}</strong><small>{item.description}</small></span><Icon name="arrow" size={17} /></button>)}</div><div className="lqa-expectation"><Icon name="target" size={16} /><p>回答基于图纸中的真实信息；点击依据，即可回到图元位置核对。</p></div></div>}
 
           {messages.map((message, index) => <article className={`lqa-message lqa-message--${message.role}`} key={index}>
-            <div className="lqa-message-who">{message.role === 'user' ? <><span className="lqa-message-avatar">你</span>你的问题</> : <><span className="lqa-assistant-mark">✦</span> 图纸助手{Number.isFinite(message.data?.performance?.total_seconds) && <span className="lqa-model-name"> · {message.data.performance.total_seconds.toFixed(1)} 秒</span>}</>}</div>
-            {message.role === 'user' ? <p className="lqa-user-text">{message.content}</p> : <><AnswerText text={message.content} />{message.data?.warnings?.length > 0 && <div className="lqa-answer-warnings"><strong>需要核对</strong>{message.data.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</div>}<Evidence items={message.data?.evidence} onLocate={locate} />{message.data?.tools_used?.length > 0 && <details className="lqa-tools"><summary>查看查询过程 · {message.data.tools_used.length} 次工具调用</summary>{message.data.tools_used.map((tool, i) => <div key={i}><strong>{tool.name}</strong><p>{typeof tool.summary === 'string' ? tool.summary : JSON.stringify(tool.summary)}</p><code>{JSON.stringify(tool.args || {})}</code></div>)}</details>}</>}
+            <div className="lqa-message-who">{message.role === 'user' ? <><span className="lqa-message-avatar">你</span>你的问题</> : <><span className="lqa-assistant-mark">✦</span> 图纸助手{Number.isFinite(message.data?.performance?.total_seconds) && <span className="lqa-model-name"> · 处理 {message.data.performance.total_seconds.toFixed(1)} 秒{message.data.queue_seconds >= 1 && ` · 排队 ${message.data.queue_seconds.toFixed(1)} 秒`}</span>}</>}</div>
+            {message.role === 'user' ? <p className="lqa-user-text">{message.content}</p> : <><AnswerText text={message.content} />{message.data?.warnings?.length > 0 && <div className="lqa-answer-warnings"><strong>需要核对</strong>{message.data.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</div>}<Evidence items={message.data?.evidence} onLocate={locate} />{message.data?.tools_used?.length > 0 && <details className="lqa-tools"><summary>查看查询过程 · {message.data.tools_used.length} 次工具调用</summary>{message.data.tools_used.map((tool, i) => <div key={i}><strong>{tool.name}</strong><p>{typeof tool.summary === 'string' ? tool.summary : JSON.stringify(tool.summary)}</p><code>{JSON.stringify(tool.args || {})}</code></div>)}</details>}<AnswerFeedback requestId={message.data?.request_id} /></>}
           </article>)}
-          {asking && <div className="lqa-thinking" role="status"><span className="lqa-spinner" /><div><strong>正在检索图纸并组织回答</strong><p>已等待 {waitSeconds} 秒 · 正在核对图纸，复杂问题可能需要更久。</p></div></div>}
+          {asking && <div className="lqa-thinking" role="status"><span className="lqa-spinner" /><div><strong>{qaProgress?.state === 'queued' ? `正在排队 · 第 ${qaProgress.position} 位` : '正在检索图纸并组织回答'}</strong><p>已等待 {waitSeconds} 秒 · {qaProgress?.state === 'queued' ? `已有 ${qaProgress.active} 个问答处理中，排队期间不扣额度。` : '正在核对图纸，复杂问题可能需要更久。'}</p></div></div>}
           {askError && <div className="lqa-banner lqa-banner--error" role="alert"><strong>本次问答未成功</strong><p>{askError}</p><span>问题已保留在输入框，可重新发送。</span></div>}
           <div ref={chatEndRef} />
         </div>
-        <form className="lqa-composer" onSubmit={submitQuestion}><label htmlFor="lqa-question" className="sr-only">向图纸提问</label><div className="lqa-input-box"><textarea ref={questionRef} id="lqa-question" placeholder={session ? '例如：这个 CAD 文件里面有什么图？' : '请先上传一张图纸…'} value={question} onChange={(event) => setQuestion(event.target.value)} disabled={!session || asking || uploading} rows={3} maxLength={4000} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submitQuestion(); } }} /><div className="lqa-input-footer"><span>Enter 发送 · Shift + Enter 换行</span><button type="submit" aria-label="发送问题" disabled={!session || !question.trim() || asking || uploading || status?.configured === false}><Icon name="send" size={20} /></button></div></div><p>整图预览、局部截图、相关图元与对话将发送到 DeepSeek；请结合原图复核。</p></form>
+        <form className="lqa-composer" onSubmit={submitQuestion}><label htmlFor="lqa-question" className="sr-only">向图纸提问</label><div className="lqa-input-box"><textarea ref={questionRef} id="lqa-question" placeholder={session ? '例如：这个 CAD 文件里面有什么图？' : '请先上传一张图纸…'} value={question} onChange={(event) => setQuestion(event.target.value)} disabled={!session || asking || uploading} rows={3} maxLength={4000} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submitQuestion(); } }} /><div className="lqa-input-footer"><span>Enter 发送 · Shift + Enter 换行</span><button type="submit" aria-label="发送问题" disabled={!session || !question.trim() || asking || uploading || status?.configured === false}><Icon name="send" size={20} /></button></div></div><details className="lqa-data-disclosure"><summary>数据使用与试用记录说明</summary><p>{MODEL_DATA_NOTICE}</p><p>{TRIAL_RECORD_NOTICE}</p></details></form>
       </section>
     </div>
     <footer className="lqa-page-footer"><span>图纸知间 <span className="lqa-footer-divider">/</span> 基于 cad-ai-agent</span><span>几何结果不等于建筑净面积 · 关键结论请结合原图复核</span></footer>

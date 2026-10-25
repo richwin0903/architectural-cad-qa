@@ -12,26 +12,39 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 from starlette.concurrency import run_in_threadpool
 
 from .admin_auth import AdminAuth, AuthConfig, public_session
 from .deepseek_qa import QARequest
 from .production_dwg import normalized_dwg
+from .qa_analytics import QAAnalytics
+from .qa_queue import QAQueue
 
 
 class LoginBody(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=1024)
+
+
+class QueuedQARequest(QARequest):
+    request_id: str = Field(default_factory=lambda: uuid4().hex, pattern=r"^[a-f0-9]{32}$")
+
+
+class FeedbackBody(BaseModel):
+    request_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    helpful: StrictBool
 
 
 def browser_dxf_encoding(encoding: str) -> str:
@@ -114,7 +127,12 @@ def create_app(
     )
     session_dir = session_cleanup_dir or Path("/tmp/cad-sessions")
     upload_lock = asyncio.Lock()
-    qa_lock = asyncio.Lock()
+    qa_queue = QAQueue(
+        concurrency=int(os.getenv("CAD_QA_CONCURRENCY", "2")),
+        max_waiting=int(os.getenv("CAD_QA_MAX_WAITING", "8")),
+        wait_seconds=float(os.getenv("CAD_QA_QUEUE_WAIT_SECONDS", "90")),
+    )
+    analytics = QAAnalytics(auth.config.db_path.with_name("qa-events.sqlite3"))
 
     def delete_drawings(uid: str) -> None:
         for session in list(prototype.session_mgr._sessions.values()):
@@ -122,6 +140,7 @@ def create_app(
                 prototype.session_mgr.delete(session.session_id)
 
     def cleanup(*, startup: bool = False) -> None:
+        analytics.cleanup(startup=startup)
         # Capture drawings first. A login/upload that arrives after this
         # snapshot cannot be mistaken for a revoked older session.
         drawings = list(prototype.session_mgr._sessions.values())
@@ -170,6 +189,8 @@ def create_app(
     )
     app.state.admin_auth = auth
     app.state.cleanup = cleanup
+    app.state.qa_queue = qa_queue
+    app.state.qa_analytics = analytics
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request: Request, _exc: RequestValidationError):
@@ -299,7 +320,7 @@ def create_app(
     )
 
     @app.post("/api/local-qa")
-    async def local_qa(body: QARequest, request: Request, user: dict = Depends(require_user)):
+    async def local_qa(body: QueuedQARequest, request: Request, user: dict = Depends(require_user)):
         # Reject invalid/foreign drawings before charging or contacting the model.
         try:
             drawing = prototype.session_mgr.get(body.session_id, user["uid"])
@@ -307,23 +328,74 @@ def create_app(
             raise HTTPException(404, "图纸不存在或已过期。") from None
         if drawing.context is None or not body.question.strip():
             raise HTTPException(422, "请上传有效图纸并填写问题。")
-        if qa_lock.locked():
-            raise HTTPException(
-                429,
-                "服务正在处理其他问答，请稍后重试；本次未扣额度。",
-                headers={"Retry-After": "10"},
-            )
-        async with qa_lock:
-            lease = await run_in_threadpool(auth.reserve_trial_request, user, "qa")
+        if (
+            user.get("role") == "trial"
+            and min(user["usage"]["daily_qa_remaining"], user["usage"]["total_qa_remaining"]) <= 0
+        ):
+            raise HTTPException(429, "问答额度已用完，请次日重试或联系管理员。")
+
+        async def require_live():
+            if await request.is_disconnected():
+                raise HTTPException(499, "请求已取消。")
+            current = auth.authenticate(request)
+            if current is None or current["uid"] != user["uid"]:
+                raise HTTPException(401, "登录已过期，请重新登录。")
             try:
-                result = await qa_endpoint(body, user)
-                current = auth.authenticate(request)
-                if current is None or current["uid"] != user["uid"]:
-                    raise HTTPException(401, "登录已过期，请重新登录。")
-                result["account"] = public_session(current)
-                return result
-            finally:
+                prototype.session_mgr.get(body.session_id, user["uid"])
+            except (KeyError, PermissionError):
+                raise HTTPException(404, "图纸不存在或已过期。") from None
+            return current
+
+        ticket = qa_queue.admit(body.request_id, user)
+        lease = None
+        recorded = False
+        processing_started = None
+        queue_seconds = 0.0
+        outcome, code, performance = "failed", 500, None
+        try:
+            analytics.start(body.request_id, user, body.question)
+            recorded = True
+            await qa_queue.wait(ticket, require_live)
+            queue_seconds = time.monotonic() - ticket.created
+            # Recheck persistent quotas after waiting. Waiting itself is never charged.
+            lease = await run_in_threadpool(auth.reserve_trial_request, user, "qa")
+            processing_started = time.monotonic()
+            analytics.running(body.request_id, queue_seconds)
+            result = await qa_endpoint(body, user)
+            current = await require_live()
+            result["account"] = public_session(current)
+            result["request_id"] = body.request_id
+            result["queue_seconds"] = round(queue_seconds, 2)
+            performance = result.get("performance")
+            outcome, code = "succeeded", 200
+            return result
+        except HTTPException as exc:
+            code = exc.status_code
+            outcome = "wait_timeout" if code == 504 and processing_started is None else "failed"
+            raise
+        except asyncio.CancelledError:
+            outcome, code = "cancelled", 499
+            raise
+        finally:
+            try:
                 auth.finish_trial_request(lease)
+            finally:
+                qa_queue.finish(ticket, outcome)
+            if recorded:
+                duration = time.monotonic() - processing_started if processing_started else 0
+                waiting = queue_seconds if processing_started else time.monotonic() - ticket.created
+                try:
+                    analytics.finish(body.request_id, outcome, waiting, duration, code, performance)
+                except sqlite3.Error:
+                    logging.getLogger(__name__).warning("QA evaluation completion was not saved")
+
+    @app.get("/api/qa-status/{request_id}")
+    async def qa_status(request_id: str, user: dict = Depends(require_user)):
+        return qa_queue.status(request_id, user)
+
+    @app.post("/api/qa-feedback")
+    async def qa_feedback(body: FeedbackBody, user: dict = Depends(require_user)):
+        return analytics.feedback(body.request_id, user, body.helpful)
 
     @app.post("/api/upload")
     async def upload(
@@ -340,6 +412,8 @@ def create_app(
             if current is None or current["uid"] != user["uid"]:
                 raise HTTPException(401, "登录已过期，请重新登录。")
 
+        if user["username"] in qa_queue.accounts:
+            raise HTTPException(429, "当前账号的问答正在处理或排队，请等待完成后上传。")
         if user.get("role") == "trial" and upload_lock.locked():
             raise HTTPException(429, "上传服务正忙，请稍后重试；本次未扣额度。")
         async with upload_lock:

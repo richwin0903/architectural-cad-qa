@@ -13,9 +13,9 @@ https://localhost {
 		}
 		reverse_proxy app:8000 {
 			transport http {
-				read_timeout 210s
-				write_timeout 210s
-				response_header_timeout 210s
+				read_timeout 330s
+				write_timeout 330s
+				response_header_timeout 330s
 			}
 		}
 	}

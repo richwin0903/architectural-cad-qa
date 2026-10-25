@@ -66,9 +66,12 @@ docker compose up -d --force-recreate --wait
 ## 资源与访问边界
 
 单文件 25 MB，代理允许稍大的 multipart 请求体。DWG 转换 60 秒，问答总超时 180 秒；
-代理读写超时 210 秒。每次问答最多 6 次模型调用、24 次工具调用、10 张渲染视图；
+排队最长 90 秒，代理读写超时 330 秒、浏览器问答超时 300 秒。每次问答最多 6 次模型调用、24 次工具调用、10 张渲染视图；
 开场最多预览 4 个非空布局，其余布局由工具按需检查并披露未覆盖范围。
 默认 deepseek-flash 必须支持图像输入和工具调用；换用纯文本模型会明确报错，不伪造视觉结果。
 模型费用来自你的 DeepSeek 账户，已提供试用账号的请求配额；尚无按金额计费的费用熔断。
-全站最多同时运行一个问答，繁忙时返回 429 且不扣额度；上传串行处理。
+默认同时运行 2 个问答，最多 8 个 FIFO 排队；等待超时或队列满不扣额度。上传串行处理。
+通过 `CAD_QA_CONCURRENCY`（1～3）、`CAD_QA_MAX_WAITING`（0～20）和
+`CAD_QA_QUEUE_WAIT_SECONDS`（最大 90）配置。保持单 Uvicorn worker；图纸渲染仍用锁串行保护。
 只分发试用账号，不要公开管理员账号。账号生成及管理见 [TRIAL_ACCOUNTS.md](TRIAL_ACCOUNTS.md)。
+试用反馈、记录导出及成本核算边界见 [TRIAL_EVALUATION.md](TRIAL_EVALUATION.md)。

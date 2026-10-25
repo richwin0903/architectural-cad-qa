@@ -18,5 +18,8 @@ Provisioned trial accounts have per-account quotas and session-isolated drawings
 There is no public registration, payment, invitation-code redemption or currency
 spend cap. Provision/manage trials only through the server CLI. Keep generated
 accounts.txt and accounts-import.json inside ignored, protected .local directories.
+QA evaluation questions are private: keep databases and exports out of Git and
+logs. Default reports are aggregate-only; maintain the 30-day retention policy
+and shared login/workspace disclosure when changing recorded fields.
 Publish or push only when the user requests it; local preparation does not
 authorize creating a remote repository.

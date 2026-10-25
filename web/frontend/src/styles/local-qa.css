@@ -312,3 +312,12 @@
 
 .lqa-trial-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; }
 .lqa-trial-summary small { flex-basis: 100%; line-height: 1.6; }
+
+.lqa-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; color: var(--lqa-muted, #687068); }
+.lqa-feedback button { padding: 5px 12px; background: transparent; border: 1px solid #d9ddd5; border-radius: 8px; cursor: pointer; color: inherit; font: inherit; }
+.lqa-feedback button[aria-pressed="true"] { background: #e3eddf; border-color: #65805d; color: #344e2e; }
+.lqa-feedback button:disabled { opacity: .6; cursor: wait; }
+.lqa-feedback small[role="alert"] { color: #a33c2f; flex-basis: 100%; }
+.lqa-data-disclosure { margin-top: 8px; font-size: 11px; line-height: 1.6; color: #687068; }
+.lqa-data-disclosure summary { cursor: pointer; }
+.lqa-data-disclosure p { text-align: left; }

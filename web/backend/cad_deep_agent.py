@@ -78,6 +78,9 @@ class CadBoundary(AgentMiddleware):
         self.model_calls = 0
         self.tool_calls = 0
         self.model_seconds = 0.0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.usage_reported = False
 
     async def awrap_model_call(self, request, handler):
         if self.model_calls >= MAX_TURNS:
@@ -100,6 +103,10 @@ class CadBoundary(AgentMiddleware):
         self.model_seconds += time.perf_counter() - started
         for message in response.result:
             if isinstance(message, AIMessage):
+                usage = message.usage_metadata or {}
+                self.usage_reported = self.usage_reported or bool(usage)
+                self.input_tokens += usage.get("input_tokens", 0)
+                self.output_tokens += usage.get("output_tokens", 0)
                 if message.response_metadata.get("finish_reason") == "length":
                     raise HTTPException(502, "模型输出达到长度上限，请缩小问题范围后重试。")
                 if len(message.tool_calls) > MAX_TOOL_CALLS_PER_TURN:
@@ -275,5 +282,7 @@ async def run_qa(service, request, drawing, client: httpx.AsyncClient):
         "model_calls": boundary.model_calls,
         "rendered_views": views.rendered,
         "cached_views": views.cache_hits,
+        "input_tokens": boundary.input_tokens if boundary.usage_reported else None,
+        "output_tokens": boundary.output_tokens if boundary.usage_reported else None,
     }
     return response

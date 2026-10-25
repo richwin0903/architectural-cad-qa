@@ -240,6 +240,9 @@ flowchart LR
 后续提交及推送方式见 [GITHUB.md](docs/GITHUB.md)。
 不要上传 `.secrets`、`.env`、私有图纸、数据库或原服务器的 SSH 配置。
 
+本项目开发中使用了 [Claude](https://www.anthropic.com/claude)（Anthropic）作为 AI 编程助手，
+在提交中以共同作者署名。
+
 ## 来源与许可
 
 应用源码继承上游 **Apache-2.0** 许可；GNU LibreDWG 转换器及相关测试样本使用 **GPL-3.0-or-later**；
